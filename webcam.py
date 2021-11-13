@@ -8,7 +8,45 @@ import sys
 import time
 from threading import Thread
 import importlib.util
-
+from PIL import Image
+import torch
+# 이미지 경로를 받아오면 딥러닝 형태로 변환해주는 함수
+def process_image(image_path):
+    # Load Image
+    img = Image.open(image_path)
+    
+    # 사이즈
+    width, height = img.size
+    img = img.resize((255, int(255*(height/width))) if width < height else (int(255*(width/height)), 255)) # 255 x 255 사이즈로 변환
+    
+    # 변화된 사이즈
+    width, height = img.size
+    left = (width - 224)/2
+    top = (height - 224)/2
+    right = (width + 224)/2
+    bottom = (height + 224)/2
+    img = img.crop((left, top, right, bottom))
+    
+    img = np.array(img)
+    print(img.shape)
+    # Chnnel이 먼저되게끔 설정(tensor로 변환)
+    img = img.transpose((2, 0, 1))
+    
+    # 0~1로 변환
+    img = img/255
+    
+    # Normalize 실시
+    img[0] = (img[0] - 0.485)/0.229
+    img[1] = (img[1] - 0.456)/0.224
+    img[2] = (img[2] - 0.406)/0.225
+    
+    # 배치사이즈삽입 1
+    img = img[np.newaxis,:]
+    
+    # Turn into a torch tensor
+    image = torch.from_numpy(img)
+    image = image.float()
+    return image
 # Define VideoStream class to handle streaming of video from webcam in separate processing thread
 # Source - Adrian Rosebrock, PyImageSearch: https://www.pyimagesearch.com/2015/12/28/increasing-raspberry-pi-fps-with-python-and-opencv/
 class VideoStream:
@@ -79,21 +117,7 @@ use_TPU = args.edgetpu
 # Import TensorFlow libraries
 # If tflite_runtime is installed, import interpreter from tflite_runtime, else import from regular tensorflow
 # If using Coral Edge TPU, import the load_delegate library
-pkg = importlib.util.find_spec('tflite_runtime')
-if pkg:
-    from tflite_runtime.interpreter import Interpreter
-    if use_TPU:
-        from tflite_runtime.interpreter import load_delegate
-else:
-    from tensorflow.lite.python.interpreter import Interpreter
-    if use_TPU:
-        from tensorflow.lite.python.interpreter import load_delegate
 
-# If using Edge TPU, assign filename for Edge TPU model
-if use_TPU:
-    # If user has specified the name of the .tflite file, use that name, otherwise use default 'edgetpu.tflite'
-    if (GRAPH_NAME == 'detect.tflite'):
-        GRAPH_NAME = 'edgetpu.tflite'       
 
 # Get path to current working directory
 CWD_PATH = os.getcwd()
@@ -114,27 +138,7 @@ with open(PATH_TO_LABELS, 'r') as f:
 if labels[0] == '???':
     del(labels[0])
 
-# Load the Tensorflow Lite model.
-# If using Edge TPU, use special load_delegate argument
-if use_TPU:
-    interpreter = Interpreter(model_path=PATH_TO_CKPT,
-                              experimental_delegates=[load_delegate('libedgetpu.so.1.0')])
-    print(PATH_TO_CKPT)
-else:
-    interpreter = Interpreter(model_path=PATH_TO_CKPT)
 
-interpreter.allocate_tensors()
-
-# Get model details
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-height = input_details[0]['shape'][1]
-width = input_details[0]['shape'][2]
-
-floating_model = (input_details[0]['dtype'] == np.float32)
-
-input_mean = 127.5
-input_std = 127.5
 
 # Initialize frame rate calculation
 frame_rate_calc = 1
@@ -145,7 +149,7 @@ videostream = VideoStream(resolution=(imW,imH),framerate=30).start()
 time.sleep(1)
 
 # Create window
-cv2.namedWindow('Object detector', cv2.WINDOW_NORMAL)
+cv2.namedWindow('Object Calssification', cv2.WINDOW_NORMAL)
 
 #for frame1 in camera.capture_continuous(rawCapture, format="bgr",use_video_port=True):
 while True:
@@ -159,59 +163,16 @@ while True:
     # Acquire frame and resize to expected shape [1xHxWx3]
     frame = frame1.copy()
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame_resized = cv2.resize(frame_rgb, (width, height))
-    input_data = np.expand_dims(frame_resized, axis=0)
 
-    # Normalize pixel values if using a floating model (i.e. if model is non-quantized)
-    if floating_model:
-        input_data = (np.float32(input_data) - input_mean) / input_std
 
-    # Perform the actual detection by running the model with the image as input
-    interpreter.set_tensor(input_details[0]['index'],input_data)
-    interpreter.invoke()
-
-    # Retrieve detection results
-    boxes = interpreter.get_tensor(output_details[0]['index'])[0] # Bounding box coordinates of detected objects
-    classes = interpreter.get_tensor(output_details[1]['index'])[0] # Class index of detected objects
-    scores = interpreter.get_tensor(output_details[2]['index'])[0] # Confidence of detected objects
-    #num = interpreter.get_tensor(output_details[3]['index'])[0]  # Total number of detected objects (inaccurate and not needed)
-
-    # Loop over all detections and draw detection box if confidence is above minimum threshold
-    for i in range(len(scores)):
-        if ((scores[i] > min_conf_threshold) and (scores[i] <= 1.0)):
-
-            # Get bounding box coordinates and draw box
-            # Interpreter can return coordinates that are outside of image dimensions, need to force them to be within image using max() and min()
-            ymin = int(max(1,(boxes[i][0] * imH)))
-            xmin = int(max(1,(boxes[i][1] * imW)))
-            ymax = int(min(imH,(boxes[i][2] * imH)))
-            xmax = int(min(imW,(boxes[i][3] * imW)))
-            
-            cv2.rectangle(frame, (xmin,ymin), (xmax,ymax), (10, 255, 0), 2)
-            
-            # Draw label
-            object_name = labels[int(classes[i])] # Look up object name from "labels" array using class index
-            label = '%s: %d%%' % (object_name, int(scores[i]*100)) # Example: 'person: 72%'
-            labelSize, baseLine = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2) # Get font size
-            label_ymin = max(ymin, labelSize[1]   10) # Make sure not to draw label too close to top of window
-            cv2.rectangle(frame, (xmin, label_ymin-labelSize[1]-10), (xmin labelSize[0], label_ymin baseLine-10), (255, 255, 255), cv2.FILLED) # Draw white box to put label text in
-            cv2.putText(frame, label, (xmin, label_ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2) # Draw label text
-
-            # Draw circle in center
-            xcenter = xmin   (int(round((xmax - xmin) / 2)))
-            ycenter = ymin   (int(round((ymax - ymin) / 2)))
-            cv2.circle(frame, (xcenter, ycenter), 5, (0,0,255), thickness=-1)
-
-            # Print info
-            print('Object '   str(i)   ': '   object_name   ' at ('   str(xcenter)   ', '   str(ycenter)   ')')
-
+                
     # Draw framerate in corner of frame
     cv2.putText(frame,'FPS: {0:.2f}'.format(frame_rate_calc),(30,50),cv2.FONT_HERSHEY_SIMPLEX,1,(255,255,0),2,cv2.LINE_AA)
 
     # All the results have been drawn on the frame, so it's time to display it.
     cv2.imshow('Object detector', frame)
 
-    # Calculate framerate
+# Calculate framerate
     t2 = cv2.getTickCount()
     time1 = (t2-t1)/freq
     frame_rate_calc= 1/time1
