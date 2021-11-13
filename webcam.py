@@ -1,4 +1,5 @@
-
+#!/usr/bin/python
+# -*- coding:utf-8 -*-
 # Import packages
 import os
 import argparse
@@ -124,7 +125,7 @@ parser.add_argument('--labels', help='Name of the labelmap file, if different th
                     default='labelmap.txt')
 parser.add_argument('--resolution', help='Desired webcam resolution in WxH. If the webcam does not support the resolution entered, errors may occur.',
                     default='1280x720')
-device = torch.device("cuda")
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -150,9 +151,9 @@ if __name__ == '__main__':
     frame_rate_calc = 1
     freq = cv2.getTickFrequency()
     print("Load Model")
-    model = torch.load('./model.pth', map_location="cuda:0")
+    model = torch.load('./model.pth', map_location=device)
     model.eval()
-    device = torch.device("cuda")
+    device = torch.device(device)
     model.to(device)
     print("Loaded Model!")
     # Initialize video stream
