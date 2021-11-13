@@ -127,5 +127,11 @@ dmypy.json
 
 
 *.pth
+*.egg
+dist
+build
+
+model.tflite
+Recycle-Item-Detection/
 # Pyre type checker
 .pyre/
