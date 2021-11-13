@@ -1,0 +1,5 @@
+background
+can
+pet-label off
+pet-label on
+vinyl
